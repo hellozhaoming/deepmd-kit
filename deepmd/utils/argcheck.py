@@ -918,6 +918,13 @@ def optimizer_args():
                 default=0.0001,
                 doc=doc_wd,
             ),
+            Argument(
+                "clip_norm",
+                [str,float],
+                optional=True,
+                default="None",
+                doc=doc_wd,
+            ),
         ],
         optional=True,
         default={"type":"Adam"},

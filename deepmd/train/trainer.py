@@ -323,14 +323,15 @@ class DPTrainer:
         #optimizer type
         def get_optimizer_type(optimizer_type):
             type = optimizer_type.get("type", "Adam")
+            clip_norm = optimizer_type.get("clip_norm","None")
             if type == "Lion":
                 wd = optimizer_type["wd"]
-                return [type, wd]
+                return [type,clip_norm, wd]
             elif type == "Adam":
-                return [type]
+                return [type,clip_norm]
             elif type =="SGD-momentum":
                 mom = optimizer_type["mom"]
-                return [type,mom]
+                return [type,clip_norm,mom]
             else:
                 raise RuntimeError("unknown optimizer type " + type)
             
@@ -741,7 +742,7 @@ class DPTrainer:
                     )
 
         elif self.opt_type[0] == "Lion":
-            wd = self.opt_type[1]
+            wd = self.opt_type[2]
             if self.run_opt.is_distrib:
                 if fitting_key is None:
                     if self.scale_lr_coef > 1.0:
@@ -770,7 +771,7 @@ class DPTrainer:
                     optimizer = Lion(learning_rate=self.learning_rate_dict[fitting_key],wd=wd,use_locking=False,name="Lion") ###
 
         elif self.opt_type[0] == "SGD-momentum":
-            mom = self.opt_type[1]
+            mom = self.opt_type[2]
             if self.run_opt.is_distrib:
                 if fitting_key is None:
                     if self.scale_lr_coef > 1.0:
@@ -813,34 +814,36 @@ class DPTrainer:
                 optimizer = tf.mixed_precision.enable_mixed_precision_graph_rewrite(
                     optimizer
                 )
-        return optimizer
+        ####apply gradient clipping
+        if isinstance(self.opt_type[1], float) and self.opt_type[1] > 0:
+            gradients, variables = zip(*optimizer.compute_gradients(loss=self.l2_l if not self.multi_task_mode else self.l2_l[fitting_key],
+                                                                    var_list=tf.trainable_variables()))
+            gradients, _ = tf.clip_by_global_norm(gradients, self.opt_type[1])
+            apply_op = optimizer.apply_gradients(zip(gradients, variables),
+                                                 global_step=self.global_step,
+                                                 name="train_step" if not self.multi_task_mode else f"train_step_{fitting_key}")          
+            
+
+        else:
+            apply_op = optimizer.minimize(
+                loss=self.l2_l if not self.multi_task_mode else self.l2_l[fitting_key],
+                global_step=self.global_step,
+                var_list=tf.trainable_variables(),
+                name="train_step" if not self.multi_task_mode else f"train_step_{fitting_key}"
+            )
+
+        train_ops = [apply_op] + self._extra_train_ops
+        return train_ops
 
     def _build_training(self):
-        trainable_variables = tf.trainable_variables()
-        #os.system("echo "+str(self.multi_task_mode)+" > log.txt")  ###
-        #os.system("echo "+str(self.global_step)+" >> log.txt")###
-
+        
         if not self.multi_task_mode:
-            optimizer = self._build_optimizer()
-            apply_op = optimizer.minimize(
-                loss=self.l2_l,
-                global_step=self.global_step,
-                var_list=trainable_variables,
-                name="train_step"
-            )
-            train_ops = [apply_op] + self._extra_train_ops
+            train_ops = self._build_optimizer()
             self.train_op = tf.group(*train_ops)
         else:
             self.train_op = {}
             for fitting_key in self.fitting_type_dict:
-                optimizer = self._build_optimizer(fitting_key=fitting_key)
-                apply_op = optimizer.minimize(
-                    loss=self.l2_l[fitting_key],
-                    global_step=self.global_step,
-                    var_list=trainable_variables,
-                    name=f"train_step_{fitting_key}",
-                )
-                train_ops = [apply_op] + self._extra_train_ops
+                train_ops = self._build_optimizer(fitting_key=fitting_key)
                 self.train_op[fitting_key] = tf.group(*train_ops)
         log.info("built training")
 
