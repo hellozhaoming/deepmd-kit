@@ -888,6 +888,41 @@ def learning_rate_dict_args():
     return ca
 
 
+
+def optimizer_args():
+    doc_type = "The type of optimizer. Valid values are `Adam`(default), `Lion`,`SGD-momentum`."
+    doc_wd = "weight decay parameter for Lion"
+    doc_mom = "A `Tensor` or a floating point value.  The momentum for SGD"
+    return Argument(
+        "optimizer",
+        dict,
+        [
+            Argument(
+                "type",
+                str,
+                optional=True,
+                default="Adam",
+                doc=doc_type,
+            ),
+            Argument(
+                "wd",
+                float,
+                optional=True,
+                default=1.00,
+                doc=doc_wd,
+            ),
+            Argument(
+                "mom",
+                [],
+                optional=True,
+                default=0.0001,
+                doc=doc_wd,
+            ),
+        ],
+        optional=True,
+        default={"type":"Adam"},
+    )
+
 #  --- Loss configurations: --- #
 def start_pref(item):
     return f"The prefactor of {item} loss at the start of the training. Should be larger than or equal to 0. If set to none-zero value, the {item} label should be provided by file {item}.npy in each data system. If both start_pref_{item} and limit_pref_{item} are set to 0, then the {item} will be ignored."
@@ -1530,6 +1565,7 @@ def gen_args(**kwargs) -> List[Argument]:
         model_args(),
         learning_rate_args(),
         learning_rate_dict_args(),
+        optimizer_args(),
         loss_args(),
         loss_dict_args(),
         training_args(),

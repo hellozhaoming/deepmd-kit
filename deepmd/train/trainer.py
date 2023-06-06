@@ -19,6 +19,8 @@ from tensorflow.python.client import (
     timeline,
 )
 
+
+
 # load grad of force module
 import deepmd.op  # noqa: F401
 from deepmd.common import (
@@ -88,6 +90,10 @@ log = logging.getLogger(__name__)
 from deepmd.nvnmd.utils.config import (
     nvnmd_cfg,
 )
+
+###lion optimizer
+from deepmd.train.optimizer.lion_tf1 import Lion
+
 
 
 def _is_subdir(path, directory):
@@ -298,7 +304,7 @@ class DPTrainer:
             else:
                 raise RuntimeError("unknown learning_rate type " + lr_type)
             return lr, scale_lr_coef
-
+            
         # learning rate
         if not self.multi_task_mode:
             lr_param = j_must_have(jdata, "learning_rate")
@@ -313,6 +319,23 @@ class DPTrainer:
                     self.lr_dict[fitting_key],
                     self.scale_lr_coef_dict[fitting_key],
                 ) = get_lr_and_coef(lr_param)
+
+        #optimizer type
+        def get_optimizer_type(optimizer_type):
+            type = optimizer_type.get("type", "Adam")
+            if type == "Lion":
+                wd = optimizer_type["wd"]
+                return [type, wd]
+            elif type == "Adam":
+                return [type]
+            elif type =="SGD-momentum":
+                mom = optimizer_type["mom"]
+                return [type,mom]
+            else:
+                raise RuntimeError("unknown optimizer type " + type)
+            
+        optimizer_type = j_must_have(jdata, "optimizer")
+        self.opt_type=get_optimizer_type(optimizer_type)
 
         # loss
         # infer loss type by fitting_type
@@ -683,38 +706,97 @@ class DPTrainer:
         log.info("built network")
 
     def _build_optimizer(self, fitting_key=None):
-        if self.run_opt.is_distrib:
-            if fitting_key is None:
-                if self.scale_lr_coef > 1.0:
-                    log.info("Scale learning rate by coef: %f", self.scale_lr_coef)
-                    optimizer = tf.train.AdamOptimizer(
-                        self.learning_rate * self.scale_lr_coef
-                    )
+        if self.opt_type[0] == "Adam":
+            if self.run_opt.is_distrib:
+                if fitting_key is None:
+                    if self.scale_lr_coef > 1.0:
+                        log.info("Scale learning rate by coef: %f", self.scale_lr_coef)
+                        optimizer = tf.train.AdamOptimizer(
+                            self.learning_rate * self.scale_lr_coef
+                        )                     
+                    else:
+                        optimizer = tf.train.AdamOptimizer(self.learning_rate)
+                    optimizer = self.run_opt._HVD.DistributedOptimizer(optimizer)
                 else:
-                    optimizer = tf.train.AdamOptimizer(self.learning_rate)
-                optimizer = self.run_opt._HVD.DistributedOptimizer(optimizer)
+                    if self.scale_lr_coef_dict[fitting_key] > 1.0:
+                        log.info(
+                            "Scale learning rate by coef: %f",
+                            self.scale_lr_coef_dict[fitting_key],
+                        )
+                        optimizer = tf.train.AdamOptimizer(
+                            self.learning_rate_dict[fitting_key]
+                            * self.scale_lr_coef_dict[fitting_key]
+                        )
+                    else:
+                        optimizer = tf.train.AdamOptimizer(
+                            learning_rate=self.learning_rate_dict[fitting_key]
+                        )
+                    optimizer = self.run_opt._HVD.DistributedOptimizer(optimizer)
             else:
-                if self.scale_lr_coef_dict[fitting_key] > 1.0:
-                    log.info(
-                        "Scale learning rate by coef: %f",
-                        self.scale_lr_coef_dict[fitting_key],
-                    )
-                    optimizer = tf.train.AdamOptimizer(
-                        self.learning_rate_dict[fitting_key]
-                        * self.scale_lr_coef_dict[fitting_key]
-                    )
+                if fitting_key is None:
+                    optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
                 else:
                     optimizer = tf.train.AdamOptimizer(
                         learning_rate=self.learning_rate_dict[fitting_key]
                     )
-                optimizer = self.run_opt._HVD.DistributedOptimizer(optimizer)
-        else:
-            if fitting_key is None:
-                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+
+        elif self.opt_type[0] == "Lion":
+            wd = self.opt_type[1]
+            if self.run_opt.is_distrib:
+                if fitting_key is None:
+                    if self.scale_lr_coef > 1.0:
+                        log.info("Scale learning rate by coef: %f", self.scale_lr_coef)
+                        optimizer = Lion(learning_rate=self.learning_rate * self.scale_lr_coef,wd=wd,use_locking=False,name="Lion") ###
+                    else:
+                        optimizer = Lion(learning_rate=self.learning_rate,wd=wd,use_locking=False,name="Lion") ###
+                    optimizer = self.run_opt._HVD.DistributedOptimizer(optimizer)
+                else:
+                    if self.scale_lr_coef_dict[fitting_key] > 1.0:
+                        log.info(
+                            "Scale learning rate by coef: %f",
+                            self.scale_lr_coef_dict[fitting_key],
+                        )
+                        optimizer = Lion(learning_rate=self.learning_rate_dict[fitting_key]
+                            * self.scale_lr_coef_dict[fitting_key],
+                            wd=wd,
+                            use_locking=False,name="Lion") ###
+                    else:
+                        optimizer = Lion(learning_rate=self.learning_rate_dict[fitting_key],wd=wd,use_locking=False,name="Lion") ###
+                    optimizer = self.run_opt._HVD.DistributedOptimizer(optimizer)
             else:
-                optimizer = tf.train.AdamOptimizer(
-                    learning_rate=self.learning_rate_dict[fitting_key]
-                )
+                if fitting_key is None:
+                    optimizer = Lion(learning_rate=self.learning_rate,wd=wd,use_locking=False,name="Lion") ###
+                else:
+                    optimizer = Lion(learning_rate=self.learning_rate_dict[fitting_key],wd=wd,use_locking=False,name="Lion") ###
+
+        elif self.opt_type[0] == "SGD-momentum":
+            mom = self.opt_type[1]
+            if self.run_opt.is_distrib:
+                if fitting_key is None:
+                    if self.scale_lr_coef > 1.0:
+                        log.info("Scale learning rate by coef: %f", self.scale_lr_coef)
+                        optimizer = tf.train.MomentumOptimizer(learning_rate=self.learning_rate * self.scale_lr_coef,momentum=mom,use_locking=False,name="SGD-momentum") ###
+                    else:
+                        optimizer = tf.train.MomentumOptimizer(learning_rate=self.learning_rate,momentum=mom,use_locking=False,name="SGD-momentum") ###
+                    optimizer = self.run_opt._HVD.DistributedOptimizer(optimizer)
+                else:
+                    if self.scale_lr_coef_dict[fitting_key] > 1.0:
+                        log.info(
+                            "Scale learning rate by coef: %f",
+                            self.scale_lr_coef_dict[fitting_key],
+                        )
+                        optimizer = tf.train.MomentumOptimizer(learning_rate=self.learning_rate_dict[fitting_key]
+                            * self.scale_lr_coef_dict[fitting_key],
+                            momentum=mom,
+                            use_locking=False,name="SGD-momentum") ###
+                    else:
+                        optimizer = tf.train.MomentumOptimizer(learning_rate=self.learning_rate_dict[fitting_key],momentum=mom,use_locking=False,name="SGD-momentum") ###
+                    optimizer = self.run_opt._HVD.DistributedOptimizer(optimizer)
+            else:
+                if fitting_key is None:
+                    optimizer = tf.train.MomentumOptimizer(learning_rate=self.learning_rate,momentum=mom,use_locking=False,name="SGD-momentum") ###
+                else:
+                    optimizer = tf.train.MomentumOptimizer(learning_rate=self.learning_rate_dict[fitting_key],momentum=mom,use_locking=False,name="SGD-momentum") ###
 
         if self.mixed_prec is not None:
             _TF_VERSION = Version(TF_VERSION)
@@ -735,6 +817,8 @@ class DPTrainer:
 
     def _build_training(self):
         trainable_variables = tf.trainable_variables()
+        #os.system("echo "+str(self.multi_task_mode)+" > log.txt")  ###
+        #os.system("echo "+str(self.global_step)+" >> log.txt")###
 
         if not self.multi_task_mode:
             optimizer = self._build_optimizer()
@@ -742,7 +826,7 @@ class DPTrainer:
                 loss=self.l2_l,
                 global_step=self.global_step,
                 var_list=trainable_variables,
-                name="train_step",
+                name="train_step"
             )
             train_ops = [apply_op] + self._extra_train_ops
             self.train_op = tf.group(*train_ops)
