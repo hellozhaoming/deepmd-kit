@@ -6,3 +6,4 @@ git clone --recursive -b New_Optimizer_dev_Xia https://github.com/hellozhaoming/
 cd deepmd-kit
 pip install .
 conda install dpgen -c https://conda.deepmodeling.com
+conda install chardet
