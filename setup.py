@@ -97,6 +97,7 @@ setup(
         "deepmd/op",
         "deepmd/model",
         "deepmd/train",
+        "deepmd/train/optimizer",
         "deepmd/nvnmd",
         "deepmd/nvnmd/data",
         "deepmd/nvnmd/descriptor",
