@@ -1,0 +1,7 @@
+conda create -n tf python==3.*.*
+conda activate tf
+pip install tensorflow
+
+git clone --recursive -b New_Optimizer_dev_Xia https://github.com/hellozhaoming/deepmd-kit.git
+pip install .
+conda install dpgen -c https://conda.deepmodeling.com
